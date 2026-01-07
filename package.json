@@ -1,6 +1,6 @@
 {
   "name": "@cr4yfish/entity-db-fixed",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "EntityDB is an in-browser vector database wrapping indexedDB and Transformers.js",
   "main": "src/index.js",
   "types": "src/index.d.ts",
