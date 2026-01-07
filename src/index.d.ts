@@ -1,6 +1,6 @@
 // src/index.d.ts
 
-declare module "@babycommando/entity-db" {
+declare module "@cr4yfish/entity-db-fixed" {
   export class EntityDB {
     constructor(config: { vectorPath?: string; model?: string; dbName?: string });
 
