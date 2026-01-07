@@ -1,19 +1,27 @@
 import { openDB } from "idb";
-import { pipeline } from "@xenova/transformers";
-import { env } from "@xenova/transformers";
-
-// Specify a custom location for models (defaults to '/models/').
-env.localModelPath = "/huggingface";
-
-// Disable the loading of remote models from the Hugging Face Hub:
-// env.allowRemoteModels = false;
-
-// Set location of .wasm files. Defaults to use a CDN.
-// env.backends.onnx.wasm.wasmPaths = '/path/to/files/';
 
 // Default pipeline (Xenova/all-MiniLM-L6-v2)
 const defaultModel = "Xenova/all-MiniLM-L6-v2";
-const pipePromise = pipeline("feature-extraction", defaultModel);
+
+let pipePromise;
+
+const getPipeline = async (model) => {
+  if (!pipePromise) {
+    const { pipeline, env } = await import("@huggingface/transformers");
+
+    // Specify a custom location for models (defaults to '/models/').
+    env.localModelPath = "/huggingface";
+
+    // Disable the loading of remote models from the Hugging Face Hub:
+    // env.allowRemoteModels = false;
+
+    // Set location of .wasm files. Defaults to use a CDN.
+    // env.backends.onnx.wasm.wasmPaths = '/path/to/files/';
+
+    pipePromise = pipeline("feature-extraction", model);
+  }
+  return pipePromise;
+};
 
 // Cosine similarity function
 const cosineSimilarity = (vecA, vecB) => {
@@ -28,7 +36,7 @@ const cosineSimilarity = (vecA, vecB) => {
 
 // Function to get embeddings from text using HuggingFace pipeline
 const getEmbeddingFromText = async (text, model = defaultModel) => {
-  const pipe = await pipePromise;
+  const pipe = await getPipeline(model);
   const output = await pipe(text, {
     pooling: "mean",
     normalize: true,
@@ -106,15 +114,16 @@ async function loadWasm() {
 }
 
 class EntityDB {
-  constructor({ vectorPath, model = defaultModel }) {
+  constructor({ vectorPath, model = defaultModel, dbName = "EntityDB" }) {
     this.vectorPath = vectorPath;
     this.model = model;
+    this.dbName = dbName;
     this.dbPromise = this._initDB();
   }
 
   // Initialize the IndexedDB
   async _initDB() {
-    const db = await openDB("EntityDB", 1, {
+    const db = await openDB(this.dbName, 1, {
       upgrade(db) {
         if (!db.objectStoreNames.contains("vectors")) {
           db.createObjectStore("vectors", {
@@ -139,7 +148,7 @@ class EntityDB {
       const db = await this.dbPromise;
       const transaction = db.transaction("vectors", "readwrite");
       const store = transaction.objectStore("vectors");
-      const record = { vector: embedding, ...data };
+      const record = { ...data, vector: embedding };
       const key = await store.add(record);
       return key;
     } catch (error) {
@@ -170,7 +179,7 @@ class EntityDB {
       const db = await this.dbPromise;
       const transaction = db.transaction("vectors", "readwrite");
       const store = transaction.objectStore("vectors");
-      const record = { vector: packedEmbedding, ...data };
+      const record = { ...data, vector: packedEmbedding };
       const key = await store.add(record);
       return key;
     } catch (error) {
@@ -184,7 +193,7 @@ class EntityDB {
       const db = await this.dbPromise;
       const transaction = db.transaction("vectors", "readwrite");
       const store = transaction.objectStore("vectors");
-      const record = { vector: data[this.vectorPath], ...data };
+      const record = { ...data, vector: data[this.vectorPath] };
       const key = await store.add(record);
       return key;
     } catch (error) {
@@ -222,10 +231,12 @@ class EntityDB {
       const vectors = await store.getAll(); // Retrieve all vectors
 
       // Calculate cosine similarity for each vector and sort by similarity
-      const similarities = vectors.map((entry) => {
-        const similarity = cosineSimilarity(queryVector, entry.vector);
-        return { ...entry, similarity };
-      });
+      const similarities = vectors
+        .filter((entry) => entry.vector && entry.vector.length > 0)
+        .map((entry) => {
+          const similarity = cosineSimilarity(queryVector, entry.vector);
+          return { ...entry, similarity };
+        });
 
       similarities.sort((a, b) => b.similarity - a.similarity); // Sort by similarity (descending)
       return similarities.slice(0, limit); // Return the top N results based on limit
@@ -259,10 +270,12 @@ class EntityDB {
       const vectors = await store.getAll();
 
       // Calculate Hamming distance
-      const distances = vectors.map((entry) => {
-        const distance = hammingDistance(packedQueryVector, entry.vector);
-        return { ...entry, distance };
-      });
+      const distances = vectors
+        .filter((entry) => entry.vector && entry.vector.length > 0)
+        .map((entry) => {
+          const distance = hammingDistance(packedQueryVector, entry.vector);
+          return { ...entry, distance };
+        });
 
       // Sort by Hamming distance (ascending)
       distances.sort((a, b) => a.distance - b.distance);
@@ -310,10 +323,12 @@ class EntityDB {
       const vectors = await store.getAll();
 
       vectors.forEach((entry, index) => {
-        console.log(
-          `DB Vector ${index} (binary):`,
-          [...new BigUint64Array(entry.vector.buffer)].map((v) => v.toString(2))
-        );
+        if (entry.vector) {
+          console.log(
+            `DB Vector ${index} (binary):`,
+            [...new BigUint64Array(entry.vector.buffer)].map((v) => v.toString(2))
+          );
+        }
       });
 
       const wasmModule = await loadWasm();
@@ -326,12 +341,14 @@ class EntityDB {
       const wasmMemory = new Uint8Array(memory.buffer);
       wasmMemory.set(new Uint8Array(packedQueryVector.buffer), 0);
 
-      const distances = vectors.map((entry) => {
-        const dbVector = new Uint8Array(entry.vector.buffer);
-        wasmMemory.set(dbVector, 16);
-        const distance = hamming_distance(0, 16, packedQueryVector.length * 8);
-        return { ...entry, distance };
-      });
+      const distances = vectors
+        .filter((entry) => entry.vector && entry.vector.byteLength > 0)
+        .map((entry) => {
+          const dbVector = new Uint8Array(entry.vector.buffer);
+          wasmMemory.set(dbVector, 16);
+          const distance = hamming_distance(0, 16, packedQueryVector.length * 8);
+          return { ...entry, distance };
+        });
 
       distances.sort((a, b) => a.distance - b.distance);
       return distances.slice(0, limit);
@@ -350,10 +367,12 @@ class EntityDB {
       const vectors = await store.getAll(); // Retrieve all vectors
 
       // Calculate cosine similarity for each vector and sort by similarity
-      const similarities = vectors.map((entry) => {
-        const similarity = cosineSimilarity(queryVector, entry.vector);
-        return { ...entry, similarity };
-      });
+      const similarities = vectors
+        .filter((entry) => entry.vector && entry.vector.length > 0)
+        .map((entry) => {
+          const similarity = cosineSimilarity(queryVector, entry.vector);
+          return { ...entry, similarity };
+        });
 
       similarities.sort((a, b) => b.similarity - a.similarity); // Sort by similarity (descending)
       return similarities.slice(0, limit); // Return the top N results based on limit

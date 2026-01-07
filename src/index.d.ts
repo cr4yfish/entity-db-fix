@@ -2,7 +2,7 @@
 
 declare module "@babycommando/entity-db" {
   export class EntityDB {
-    constructor(config: { vectorPath: string; model?: string });
+    constructor(config: { vectorPath?: string; model?: string; dbName?: string });
 
     insert(data: { [key: string]: any }): Promise<number>;
     insertBinary(data: { [key: string]: any }): Promise<number>;
